@@ -1,12 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { EventData, MatchHistoryItem } from '../types';
+import { EventData, MatchHistoryItem, MatchData, RingStatus } from '../types';
 import { Download, RefreshCw, Trophy, Medal, Building2, Search } from 'lucide-react';
 import Papa from 'papaparse';
-import { getBoutNumber, isBoutMatch, cn } from '../lib/utils';
+import { getBoutNumber, isBoutMatch, cn, normalizeBoutNumber } from '../lib/utils';
+import { db } from '../firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
 interface EventReportProps {
   currentEventId: string | null;
   events: EventData[];
+  matchHistory: MatchHistoryItem[];
+  boutQueue: { id: string; data: MatchData }[];
+  rings: RingStatus[];
 }
 
 interface RawMatch {
@@ -34,7 +39,7 @@ interface CategoryResult {
   bronzes: WinnerResult[];
 }
 
-export function EventReport({ currentEventId, events }: EventReportProps) {
+export function EventReport({ currentEventId, events, matchHistory, boutQueue, rings }: EventReportProps) {
   const [activeTab, setActiveTab] = useState<'winners' | 'by-rank' | 'summary'>('winners');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,21 +53,13 @@ export function EventReport({ currentEventId, events }: EventReportProps) {
   const [includeAllEvents, setIncludeAllEvents] = useState(false);
 
   const fetchMatches = async () => {
-    // Determine the URL to parse: primarily winnerSheetUrl, fallback to sheetUrl if it matches docs format
-    const getValidUrl = (e: EventData) => {
-      const defaultUrl = 'https://docs.google.com/spreadsheets/d/14TrlxR_rk9S7WmdanXGLlE4Y-ry9TqY6_B6HYA0Uuus/edit?usp=sharing';
-      if (e.winnerSheetUrl && e.winnerSheetUrl.includes('docs.google.com/spreadsheets')) return e.winnerSheetUrl;
-      if (e.sheetUrl && e.sheetUrl.includes('docs.google.com/spreadsheets')) return e.sheetUrl;
-      return defaultUrl;
-    };
-
     const targetEvents = includeAllEvents 
-      ? events.filter(e => getValidUrl(e) !== null)
-      : events.filter(e => e.id === currentEventId && getValidUrl(e) !== null);
+      ? events
+      : events.filter(e => e.id === currentEventId);
 
     if (targetEvents.length === 0) {
       if (!currentEventId) return; // Silent if just no event selected
-      setError("No valid 'Winner Report Sheet URL' found for the selected event(s). Please add it in Admin settings.");
+      setError("No valid events selected.");
       setMatches([]);
       return;
     }
@@ -73,71 +70,107 @@ export function EventReport({ currentEventId, events }: EventReportProps) {
       let combinedMatches: RawMatch[] = [];
 
       for (const event of targetEvents) {
-        let activeUrl = getValidUrl(event)!;
-        if (!activeUrl.includes('/export?')) {
-          activeUrl = activeUrl.replace(/\/edit.*$/, '') + '/export?format=csv';
+        // 1. Get bracket matches from Firestore
+        let bracketMatches: any[] = [];
+        try {
+          const bracketRef = doc(db, 'tournaments', event.id, 'bracket', 'data');
+          const bracketSnap = await getDoc(bracketRef);
+          if (bracketSnap.exists()) {
+            bracketMatches = bracketSnap.data().matches || [];
+          }
+        } catch (err) {
+          console.warn(`Error fetching bracket matches for event ${event.id}:`, err);
         }
 
-        const response = await fetch(activeUrl);
-        if (!response.ok) {
-           console.warn(`Failed to fetch data for event: ${event.name}`);
-           continue; // Skip if one fails, to at least get the others
-        }
-        const csvText = await response.text();
-        
-        await new Promise<void>((resolve) => {
-          Papa.parse(csvText, {
-            complete: (result) => {
-              const rows = result.data as string[][];
-              if (rows.length < 2) {
-                resolve();
-                return;
-              }
-              
-              for (let i = 1; i < rows.length; i++) {
-                const row = rows[i];
-                if (row.length >= 10 && row[2] && row[3]) { 
-                  const sheetEventName = row[1] || '';
-                  if (sheetEventName.trim().toLowerCase() !== event.name.trim().toLowerCase()) {
-                     continue; 
-                  }
+        // 2. Get matchHistory for this event
+        const eventHistory = matchHistory.filter(h => h.eventId === event.id);
 
-                  const matchNoStr = row[3] || '';
-                  const winner = row[9] || '';
-                  const category = row[4] || '';
-                  const blueName = row[5] || '';
-                  const blueClub = row[6] || '';
-                  const redName = row[7] || '';
-                  const redClub = row[8] || '';
+        // 3. Get boutQueue for this event
+        const eventQueue = boutQueue.filter(q => q.data.eventId === event.id);
 
-                  combinedMatches.push({
-                    event: sheetEventName,
-                    category,
-                    matchNoStr,
-                    matchNo: getBoutNumber(matchNoStr),
-                    blueName: blueName.trim(),
-                    blueClub: blueClub.trim(),
-                    redName: redName.trim(),
-                    redClub: redClub.trim(),
-                    winner: winner.trim()
-                  });
-                }
-              }
-              resolve();
-            },
-            error: (err) => {
-              console.warn(`Parse error on event ${event.name}: ${err.message}`);
-              resolve();
-            },
-            skipEmptyLines: true
+        // 4. Get rings bouts for this event
+        const eventRingsBouts: MatchData[] = [];
+        rings.forEach(r => {
+          if (r.eventId === event.id || (!r.eventId && r.currentBout?.eventId === event.id)) {
+            if (r.currentBout) eventRingsBouts.push(r.currentBout);
+            if (r.onDeck) eventRingsBouts.push(r.onDeck);
+            if (r.inTheHole) eventRingsBouts.push(r.inTheHole);
+          }
+        });
+
+        // Unique keys tracker
+        const seenKeys = new Set<string>();
+
+        const addMatchIfNew = (
+          boutStr: string | number,
+          category: string,
+          blueName: string,
+          blueClub: string,
+          redName: string,
+          redClub: string,
+          winnerVal: string
+        ) => {
+          const bStr = boutStr.toString().trim();
+          const catStr = category.trim();
+          if (!bStr || !catStr) return;
+          const key = `${normalizeBoutNumber(bStr)}_${catStr.toLowerCase()}`;
+          if (seenKeys.has(key)) return;
+          seenKeys.add(key);
+
+          combinedMatches.push({
+            event: event.name,
+            category: catStr,
+            matchNoStr: bStr,
+            matchNo: getBoutNumber(bStr),
+            blueName: blueName.trim(),
+            blueClub: blueClub.trim(),
+            redName: redName.trim(),
+            redClub: redClub.trim(),
+            winner: winnerVal.trim()
           });
+        };
+
+        // Priority 1: Match History (completed matches with winners)
+        eventHistory.forEach(hist => {
+          const bMatch = bracketMatches.find(m => isBoutMatch(m.bout, hist.bout) && m.category === hist.category);
+          const qMatch = eventQueue.find(q => isBoutMatch(q.data.bout, hist.bout) && q.data.category === hist.category);
+          const rMatch = eventRingsBouts.find(b => isBoutMatch(b.bout, hist.bout) && b.category === hist.category);
+
+          const blueName = qMatch?.data.blue_name || rMatch?.blue_name || bMatch?.blue_name || bMatch?.blueName || '';
+          const blueClub = qMatch?.data.blue_club || rMatch?.blue_club || bMatch?.blue_club || bMatch?.blueClub || '';
+          const redName = qMatch?.data.red_name || rMatch?.red_name || bMatch?.red_name || bMatch?.redName || '';
+          const redClub = qMatch?.data.red_club || rMatch?.red_club || bMatch?.red_club || bMatch?.redClub || '';
+
+          let finalWinner = hist.winner || '';
+          if (hist.winnerSide === 'Blue' && blueName) {
+            finalWinner = blueName;
+          } else if (hist.winnerSide === 'Red' && redName) {
+            finalWinner = redName;
+          }
+
+          addMatchIfNew(hist.bout, hist.category, blueName, blueClub, redName, redClub, finalWinner);
+        });
+
+        // Priority 2: Active/pending matches from queue
+        eventQueue.forEach(q => {
+          addMatchIfNew(q.data.bout, q.data.category, q.data.blue_name, q.data.blue_club, q.data.red_name, q.data.red_club, '');
+        });
+
+        // Priority 3: Matches in rings
+        eventRingsBouts.forEach(b => {
+          addMatchIfNew(b.bout, b.category, b.blue_name, b.blue_club, b.red_name, b.red_club, '');
+        });
+
+        // Priority 4: Bracket matches
+        bracketMatches.forEach(bm => {
+          addMatchIfNew(bm.bout, bm.category || '', bm.blue_name || bm.blueName || '', bm.blue_club || bm.blueClub || '', bm.red_name || bm.redName || '', bm.red_club || bm.redClub || '', '');
         });
       }
 
       setMatches(combinedMatches);
       
       if (combinedMatches.length === 0) {
-          setError("No matches parsed successfully. Please check the sheet structures.");
+        setError("No tournament matches found in the system for the selected event.");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error occurred");
@@ -148,7 +181,7 @@ export function EventReport({ currentEventId, events }: EventReportProps) {
 
   useEffect(() => {
     fetchMatches();
-  }, [currentEventId, includeAllEvents]);
+  }, [currentEventId, includeAllEvents, matchHistory, boutQueue, rings]);
 
   const categoryResults = useMemo(() => {
     // Helper to recursively unwrap "WINNER OF X" into the actual player name
@@ -612,11 +645,7 @@ export function EventReport({ currentEventId, events }: EventReportProps) {
             {!includeAllEvents ? (
               events.find(e => e.id === currentEventId)?.name || 'Unknown Event'
             ) : (
-              `Aggregating across ${events.filter(e => {
-                if (e.winnerSheetUrl && e.winnerSheetUrl.includes('docs.google.com/spreadsheets')) return true;
-                if (e.sheetUrl && e.sheetUrl.includes('docs.google.com/spreadsheets')) return true;
-                return false;
-              }).length} events`
+              `Aggregating across ${events.length} events`
             )}
           </p>
         </div>
@@ -662,7 +691,7 @@ export function EventReport({ currentEventId, events }: EventReportProps) {
             className="px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold rounded-xl flex items-center gap-2 transition-all h-[40px]"
           >
             <RefreshCw size={18} className={cn(isLoading && "animate-spin")} />
-            {isLoading ? "Analyzing Data..." : "Refresh Report API"}
+            {isLoading ? "Analyzing Data..." : "Refresh Report"}
           </button>
         </div>
       </div>
@@ -753,7 +782,7 @@ export function EventReport({ currentEventId, events }: EventReportProps) {
                    {filteredCategories.length === 0 ? (
                      <tr>
                        <td colSpan={4} className="p-8 text-center text-slate-500">
-                         {isLoading ? "Scanning bracket history..." : "No categories processed yet. Are bouts completed on the synced sheet?"}
+                         {isLoading ? "Scanning bracket history..." : "No categories processed yet. Check if tournament bouts have been started or completed in the Rings."}
                        </td>
                      </tr>
                    ) : filteredCategories.map((c, i) => (

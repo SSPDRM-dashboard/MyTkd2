@@ -61,7 +61,7 @@ import {
   testSync 
 } from './services/googleSheets';
 import { cn, normalizeBoutNumber, normalizeBoutWithRing, getBoutNumber, formatBoutNumber, isBoutMatch, parseRingNumber, extractWinnerOfBout, getEventSpreadsheetUrl, getEventWebAppUrl } from './lib/utils';
-import { collection, addDoc, onSnapshot, query, orderBy, limit, serverTimestamp, doc, setDoc, deleteDoc, getDoc, getDocFromServer, where } from 'firebase/firestore';
+import { collection, addDoc, onSnapshot, query, orderBy, limit, serverTimestamp, doc, setDoc, deleteDoc, getDoc, getDocFromServer, where, getDocs } from 'firebase/firestore';
 import { db, disableFirestoreNetwork, auth } from './firebase';
 import Papa from 'papaparse';
 
@@ -2605,6 +2605,10 @@ export default function App() {
       }).finally(() => setIsSyncing(false));
     }
 
+    let updatedBoutQueue = boutQueue;
+    let updatedRings = rings;
+    let newHistory = matchHistory;
+
     // Save to match history for advancement logic
     if (currentEventId && currentBout) {
       const historyItem: MatchHistoryItem = {
@@ -2618,11 +2622,8 @@ export default function App() {
         ring: ringNumber
       };
       
-      setMatchHistory(prev => {
-        const filtered = prev.filter(h => h.id !== historyItem.id);
-        const updated = [...filtered, historyItem];
-        return updated;
-      });
+      newHistory = [...matchHistory.filter(h => h.id !== historyItem.id), historyItem];
+      setMatchHistory(newHistory);
 
       // Also save to Firestore
       const historyId = `${currentEventId}_${normalizeBoutNumber(boutNumber)}`;
@@ -2643,21 +2644,29 @@ export default function App() {
       }
 
       // Check and generate next bout
-      checkAndGenerateNextBout(boutNumber, winnerName || winner, winner === 'Blue' ? currentBout.blue_club : currentBout.red_club, currentBout.category);
+      const generationResult = checkAndGenerateNextBout(
+        boutNumber, 
+        winnerName || winner, 
+        winner === 'Blue' ? currentBout.blue_club : currentBout.red_club, 
+        currentBout.category, 
+        newHistory
+      );
+      updatedBoutQueue = generationResult.updatedBoutQueue;
+      updatedRings = generationResult.updatedRings;
     }
     
     const completedBoutIds = new Set(
-      matchHistory
+      newHistory
         .filter(h => h.eventId === currentEventId && h.winner && h.winner !== '-' && h.winner.trim() !== '')
         .map(h => normalizeBoutNumber(h.bout))
     );
 
-    const ringQueue = boutQueue.filter(q => 
+    const ringQueue = updatedBoutQueue.filter(q => 
       q.data.ring === ringNumber && 
       (!q.data.eventId || q.data.eventId === currentEventId) &&
       !completedBoutIds.has(normalizeBoutNumber(q.data.bout))
     );
-    const nextBoutIndex = boutQueue.findIndex(q => 
+    const nextBoutIndex = updatedBoutQueue.findIndex(q => 
       q.data.ring === ringNumber && 
       (!q.data.eventId || q.data.eventId === currentEventId) &&
       !completedBoutIds.has(normalizeBoutNumber(q.data.bout))
@@ -2673,7 +2682,9 @@ export default function App() {
     let pulledFromQueue = false;
     let nextItemToPull: {id: string, data: MatchData} | null = null;
 
-    if (autoPullRings[ringNumber] && !ring?.onDeck) {
+    const currentRingState = updatedRings.find(r => r.ringNumber === ringNumber) || ring;
+
+    if (autoPullRings[ringNumber] && !currentRingState?.onDeck) {
       if (ringQueue.length > 0) {
         nextItemToPull = ringQueue[0];
         pulledFromQueue = true;
@@ -2683,19 +2694,20 @@ export default function App() {
     setRings(prev => {
       const updated = prev.map(r => {
         if (r.ringNumber === ringNumber) {
-          let nextBout = r.onDeck;
-          let nextNextBout = r.inTheHole;
+          const latestRing = updatedRings.find(lg => lg.ringNumber === ringNumber) || r;
+          let nextBout = latestRing.onDeck;
+          let nextNextBout = latestRing.inTheHole;
           
           if (!nextBout && pulledFromQueue && nextItemToPull) {
             nextBout = nextItemToPull.data;
           }
 
           return {
-            ...r,
+            ...latestRing,
             currentBout: nextBout,
             onDeck: nextNextBout,
             inTheHole: null,
-            nextBoutNumber: nextBout ? getBoutNumber(nextBout.bout) + 1 : r.nextBoutNumber
+            nextBoutNumber: nextBout ? getBoutNumber(nextBout.bout) + 1 : latestRing.nextBoutNumber
           };
         }
         return r;
@@ -2713,7 +2725,7 @@ export default function App() {
     }
 
     // Sync the new current bout to Google Sheets if it exists
-    const nextBoutToSyncWin = ring?.onDeck || (pulledFromQueue && nextItemToPull ? nextItemToPull.data : null);
+    const nextBoutToSyncWin = currentRingState?.onDeck || (pulledFromQueue && nextItemToPull ? nextItemToPull.data : null);
     if (nextBoutToSyncWin && activeUrl) {
       const dataToSync = { ...nextBoutToSyncWin, ring: nextBoutToSyncWin.originalRing || nextBoutToSyncWin.ring };
       syncToGoogleSheets(activeUrl, dataToSync, getCurrentEventName());
@@ -2856,33 +2868,43 @@ export default function App() {
     return 1; // Default
   };
 
-  const checkAndGenerateNextBout = (completedBout: string | number, winnerName: string, winnerClub: string, categoryName?: string) => {
-    if (!currentEventId) return;
+  const checkAndGenerateNextBout = (
+    completedBout: string | number, 
+    winnerName: string, 
+    winnerClub: string, 
+    categoryName?: string,
+    overrideMatchHistory?: MatchHistoryItem[]
+  ) => {
+    if (!currentEventId) return { updatedBoutQueue: boutQueue, updatedRings: rings };
 
     const normHelper = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+    const activeHistory = overrideMatchHistory || matchHistory;
 
     // Resolve category helper
-    const getMappingCategory = (m: any) => {
+    const getMappingCategory = (m: any, tempQueue: typeof boutQueue, tempRings: typeof rings) => {
       if (m.categoryName && m.categoryName !== "Auto-Extracted" && m.categoryName !== "Auto-Extracted from File") {
         return m.categoryName;
       }
-      const nextMatch = boutQueue.find(b => isBoutMatch(b.data.bout, m.nextBout)) ||
-                        rings.flatMap(r => [r.currentBout, r.onDeck, r.inTheHole]).find(b => b && isBoutMatch(b.bout, m.nextBout));
+      const nextMatch = tempQueue.find(b => isBoutMatch(b.data.bout, m.nextBout)) ||
+                        tempRings.flatMap(r => [r.currentBout, r.onDeck, r.inTheHole]).find(b => b && isBoutMatch(b.bout, m.nextBout));
       if (nextMatch) {
         return nextMatch.category || nextMatch.data?.category || '';
       }
       return '';
     };
 
-    const compBoutHistObj = matchHistory.find(h => isBoutMatch(h.bout, completedBout) && h.eventId === currentEventId);
+    const compBoutHistObj = activeHistory.find(h => isBoutMatch(h.bout, completedBout) && h.eventId === currentEventId);
     const resolvedCat = categoryName || (compBoutHistObj ? compBoutHistObj.category : '');
+
+    let currentBoutQueue = [...boutQueue];
+    let currentRings = [...rings];
 
     // 1. Find mappings where this bout is a source and categories match
     const relevantMappings = mappings.filter(m => {
       const boutsMatch = isBoutMatch(m.sourceBout, completedBout);
       if (!boutsMatch) return false;
 
-      const mappingCategory = getMappingCategory(m);
+      const mappingCategory = getMappingCategory(m, currentBoutQueue, currentRings);
       if (resolvedCat && mappingCategory) {
         return normHelper(mappingCategory) === normHelper(resolvedCat);
       }
@@ -2891,13 +2913,13 @@ export default function App() {
     
     for (const mapping of relevantMappings) {
       const nextBoutId = mapping.nextBout;
-      const targetCategory = getMappingCategory(mapping);
+      const targetCategory = getMappingCategory(mapping, currentBoutQueue, currentRings);
       
       // 2. Find the other mapping for the same nextBout within the same category
       const otherMapping = mappings.find(m => 
         isBoutMatch(m.nextBout, nextBoutId) && 
         m.id !== mapping.id &&
-        normHelper(getMappingCategory(m)) === normHelper(targetCategory)
+        normHelper(getMappingCategory(m, currentBoutQueue, currentRings)) === normHelper(targetCategory)
       );
       
       let blue_name = '';
@@ -2917,7 +2939,7 @@ export default function App() {
 
       if (otherMapping) {
         // Check if the other source bout has a winner under the same category
-        const otherWinner = matchHistory.find(h => 
+        const otherWinner = activeHistory.find(h => 
           isBoutMatch(h.bout, otherMapping.sourceBout) && 
           h.eventId === currentEventId &&
           normHelper(h.category) === normHelper(targetCategory)
@@ -2938,7 +2960,7 @@ export default function App() {
       }
 
       // Check if already in queue (with match on category name to avoid cross-category overwrites)
-      const existingQueueIndex = boutQueue.findIndex(q => 
+      const existingQueueIndex = currentBoutQueue.findIndex(q => 
         isBoutMatch(q.data.bout, nextBoutId) && 
         q.data.eventId === currentEventId && 
         normHelper(q.data.category) === normHelper(targetCategory)
@@ -2946,59 +2968,48 @@ export default function App() {
       
       if (existingQueueIndex !== -1) {
         // Update existing bout in queue
-        setBoutQueue(prev => {
-          const updated = [...prev];
-          const existing = updated[existingQueueIndex].data;
-          updated[existingQueueIndex].data = {
+        const existing = currentBoutQueue[existingQueueIndex].data;
+        currentBoutQueue[existingQueueIndex] = {
+          ...currentBoutQueue[existingQueueIndex],
+          data: {
             ...existing,
             blue_name: blue_name ? blue_name.toUpperCase() : existing.blue_name,
             blue_club: blue_club ? blue_club.toUpperCase() : existing.blue_club,
             red_name: red_name ? red_name.toUpperCase() : existing.red_name,
             red_club: red_club ? red_club.toUpperCase() : existing.red_club,
-          };
-          localStorage.setItem('tkd_bout_queue', JSON.stringify(updated));
-          return updated;
-        });
+          }
+        };
       }
 
       // Check and update if already in rings (with category validation)
-      setRings(prevRings => {
-        let ringsModified = false;
-        const nextRings = prevRings.map(r => {
-          let ringChanged = false;
-          let updatedRing = { ...r };
-          ['currentBout', 'onDeck', 'inTheHole'].forEach(slot => {
-            const boutInSlot = updatedRing[slot as keyof RingStatus] as MatchData | null;
-            if (boutInSlot && 
-                isBoutMatch(boutInSlot.bout, nextBoutId) && 
-                (boutInSlot.eventId === currentEventId || !boutInSlot.eventId) &&
-                normHelper(boutInSlot.category) === normHelper(targetCategory)) {
-              updatedRing = {
-                ...updatedRing,
-                [slot]: {
-                  ...boutInSlot,
-                  blue_name: blue_name ? blue_name.toUpperCase() : boutInSlot.blue_name,
-                  blue_club: blue_club ? blue_club.toUpperCase() : boutInSlot.blue_club,
-                  red_name: red_name ? red_name.toUpperCase() : boutInSlot.red_name,
-                  red_club: red_club ? red_club.toUpperCase() : boutInSlot.red_club,
-                }
-              };
-              ringChanged = true;
-              ringsModified = true;
-            }
-          });
-          return ringChanged ? updatedRing : r;
+      currentRings = currentRings.map(r => {
+        let ringChanged = false;
+        let updatedRing = { ...r };
+        ['currentBout', 'onDeck', 'inTheHole'].forEach(slot => {
+          const boutInSlot = updatedRing[slot as keyof RingStatus] as MatchData | null;
+          if (boutInSlot && 
+              isBoutMatch(boutInSlot.bout, nextBoutId) && 
+              (boutInSlot.eventId === currentEventId || !boutInSlot.eventId) &&
+              normHelper(boutInSlot.category) === normHelper(targetCategory)) {
+            updatedRing = {
+              ...updatedRing,
+              [slot]: {
+                ...boutInSlot,
+                blue_name: blue_name ? blue_name.toUpperCase() : boutInSlot.blue_name,
+                blue_club: blue_club ? blue_club.toUpperCase() : boutInSlot.blue_club,
+                red_name: red_name ? red_name.toUpperCase() : boutInSlot.red_name,
+                red_club: red_club ? red_club.toUpperCase() : boutInSlot.red_club,
+              }
+            };
+            ringChanged = true;
+          }
         });
-        if (ringsModified) {
-          localStorage.setItem('tkd_rings', JSON.stringify(nextRings));
-          return nextRings;
-        }
-        return prevRings;
+        return ringChanged ? updatedRing : r;
       });
 
       if (existingQueueIndex === -1 && shouldGenerate) {
-        // Check if already in rings (check again because we might have just updated it above)
-        const existsInRings = rings.some(r => (
+        // Check if already in rings
+        const existsInRings = currentRings.some(r => (
           (r.currentBout && isBoutMatch(r.currentBout.bout, nextBoutId) && r.currentBout.eventId === currentEventId && normHelper(r.currentBout.category) === normHelper(targetCategory)) || 
           (r.onDeck && isBoutMatch(r.onDeck.bout, nextBoutId) && r.onDeck.eventId === currentEventId && normHelper(r.onDeck.category) === normHelper(targetCategory)) || 
           (r.inTheHole && isBoutMatch(r.inTheHole.bout, nextBoutId) && r.inTheHole.eventId === currentEventId && normHelper(r.inTheHole.category) === normHelper(targetCategory))
@@ -3019,20 +3030,25 @@ export default function App() {
             eventId: currentEventId
           };
           
-          setBoutQueue(prev => {
-            const isDuplicate = prev.some(q => 
-              isBoutMatch(q.data.bout, nextBoutId) && 
-              q.data.eventId === currentEventId &&
-              normHelper(q.data.category) === normHelper(targetCategory)
-            );
-            if (isDuplicate) return prev;
-            const updated = [...prev, { id: `auto_${currentEventId}_${nextBoutId}_${Date.now()}`, data: newMatch }];
-            localStorage.setItem('tkd_bout_queue', JSON.stringify(updated));
-            return updated;
-          });
+          const isDuplicate = currentBoutQueue.some(q => 
+            isBoutMatch(q.data.bout, nextBoutId) && 
+            q.data.eventId === currentEventId &&
+            normHelper(q.data.category) === normHelper(targetCategory)
+          );
+          if (!isDuplicate) {
+            currentBoutQueue.push({ id: `auto_${currentEventId}_${nextBoutId}_${Date.now()}`, data: newMatch });
+          }
         }
       }
     }
+
+    // Now set the state and return
+    setBoutQueue(currentBoutQueue);
+    localStorage.setItem('tkd_bout_queue', JSON.stringify(currentBoutQueue));
+    setRings(currentRings);
+    localStorage.setItem('tkd_rings', JSON.stringify(currentRings));
+
+    return { updatedBoutQueue: currentBoutQueue, updatedRings: currentRings };
   };
 
   const handlePointsUpdateApp = async (ringNumber: number, boutNumber: string | number, newPoints: any) => {
@@ -3425,11 +3441,34 @@ export default function App() {
     }
   };
 
-  const handleDeleteEvent = (id: string) => {
+  const handleDeleteEvent = async (id: string) => {
     const updated = events.filter(e => e.id !== id);
     setEvents(updated);
     localStorage.setItem('tkd_events_v3', JSON.stringify(updated));
     
+    // Asynchronously delete all event-specific history, mappings, and brackets in Firestore
+    try {
+      // 1. Delete all match history documents for this event in Firestore
+      const historyQuery = query(collection(db, 'matchHistory'), where('eventId', '==', id));
+      const historySnapshot = await getDocs(historyQuery);
+      const historyDeletions = historySnapshot.docs.map(document => deleteDoc(doc(db, 'matchHistory', document.id)));
+      
+      // 2. Delete all event logic / mappings for this event in Firestore
+      const logicQuery = query(collection(db, 'event_logic'), where('eventId', '==', id));
+      const logicSnapshot = await getDocs(logicQuery);
+      const logicDeletions = logicSnapshot.docs.map(document => deleteDoc(doc(db, 'event_logic', document.id)));
+      
+      // 3. Delete the tournament bracket document for this event in Firestore
+      const bracketDocRef = doc(db, 'tournaments', id, 'bracket', 'data');
+      const bracketDeletion = deleteDoc(bracketDocRef);
+
+      // Execute all deletions in Firestore
+      await Promise.all([...historyDeletions, ...logicDeletions, bracketDeletion]);
+      console.log(`Successfully deleted all Firestore history, mappings, and bracket data for event ID: ${id}`);
+    } catch (err) {
+      console.error("Error deleting event history/data from Firestore:", err);
+    }
+
     if (updated.length === 0) {
       setBoutQueue([]);
       localStorage.removeItem('tkd_bout_queue');
@@ -4658,6 +4697,9 @@ export default function App() {
             <EventReport
               currentEventId={currentEventId}
               events={events}
+              matchHistory={matchHistory}
+              boutQueue={boutQueue}
+              rings={rings}
             />
           )}
 
