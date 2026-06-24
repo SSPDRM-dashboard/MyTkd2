@@ -566,7 +566,19 @@ export default function App() {
   const [events, setEvents] = useSyncedState<EventData[]>('tkd_events_v3', []);
   const [currentEventId, setCurrentEventId] = useSyncedState<string | null>('tkd_current_event_v3', null);
 
+  const isStrictPublic = typeof import.meta !== 'undefined' && import.meta.env && (
+    import.meta.env.VITE_APP_MODE === 'PUBLIC' || 
+    (typeof window !== 'undefined' && 
+     !new URLSearchParams(window.location.search).has('login') && 
+     !new URLSearchParams(window.location.search).has('manage') && 
+     !new URLSearchParams(window.location.search).has('operator') && 
+     !localStorage.getItem('tkd_user'))
+  );
+
   const [user, setUser] = useState<UserAccount | null>(() => {
+    if (isStrictPublic) {
+      return null;
+    }
     const saved = localStorage.getItem('tkd_user');
     const loginTime = localStorage.getItem('tkd_login_time');
     
@@ -1156,7 +1168,13 @@ export default function App() {
     const isPublicUrl = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'public';
     return isPublicEnv || isPublicUrl;
   });
-  const [showLogin, setShowLogin] = useState(false);
+  const [showLogin, setShowLogin] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.has('login') || params.has('manage') || params.has('operator');
+    }
+    return false;
+  });
   const [showNewBoutModal, setShowNewBoutModal] = useState(false);
   const [newBoutInitialRing, setNewBoutInitialRing] = useState<number | undefined>(undefined);
   const [showEditResultModal, setShowEditResultModal] = useState(false);
@@ -3359,6 +3377,7 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (isStrictPublic) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       // Secret shortcut: Ctrl + Shift + L to show login
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') {
@@ -3368,7 +3387,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [user]);
+  }, [user, isStrictPublic]);
 
   const handleLogout = () => {
     setUser(null);
@@ -3532,7 +3551,7 @@ export default function App() {
     return event ? event.name : '';
   }, [events, effectivePublicEventId]);
 
-  if (!user && showLogin && !isPublicView) {
+  if (!user && showLogin && !isPublicView && !isStrictPublic) {
     return <LoginScreen onLogin={handleLogin} events={events} onBack={() => setShowLogin(false)} />;
   }
 
@@ -9476,7 +9495,14 @@ function PublicDashboardView({
     };
   }, []);
 
-  const isStrictPublic = import.meta.env.VITE_APP_MODE === 'PUBLIC' || new URLSearchParams(window.location.search).get('view') === 'public';
+  const isStrictPublic = import.meta.env.VITE_APP_MODE === 'PUBLIC' || 
+    (typeof window !== 'undefined' && (
+      new URLSearchParams(window.location.search).get('view') === 'public' ||
+      (!new URLSearchParams(window.location.search).has('login') && 
+       !new URLSearchParams(window.location.search).has('manage') && 
+       !new URLSearchParams(window.location.search).has('operator') && 
+       !localStorage.getItem('tkd_user'))
+    ));
 
   const handleLogoClick = () => {
     setLogoClicks(prev => prev + 1);
@@ -9640,13 +9666,13 @@ function PublicDashboardView({
         </div>
         <div className="flex flex-col items-center gap-2">
           <p className="text-[11px] text-slate-500 font-medium">© 2026 MY-TKD Tournament Management System</p>
-          {/* Hide back button in strict public mode */}
-          {!isStrictPublic && (
+          {/* Hide back/operator button in public/spectator mode and strict public mode */}
+          {!isStrictPublic && !isSpectator && (
             <button 
               onClick={onBack}
               className="px-3.5 py-1.5 bg-slate-700/30 hover:bg-slate-700 text-[10px] text-slate-400 hover:text-white uppercase font-black tracking-widest transition-all mt-2 rounded-lg border border-slate-700/50"
             >
-              {isSpectator ? "Operator Access" : "Exit Public View"}
+              Exit Public View
             </button>
           )}
         </div>
