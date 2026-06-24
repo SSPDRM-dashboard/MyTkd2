@@ -3590,7 +3590,7 @@ export default function App() {
     return event ? event.name : '';
   }, [events, effectivePublicEventId]);
 
-  if (!user && showLogin && !isPublicView && !isStrictPublic) {
+  if (!user && showLogin && !isPublicView) {
     return <LoginScreen onLogin={handleLogin} events={events} onBack={() => setShowLogin(false)} />;
   }
 
@@ -9608,14 +9608,25 @@ function PublicDashboardView({
           </div>
         </div>
 
-        {selectedEventName && (
-          <div className="bg-red-600/10 border border-red-500/25 px-3 py-1.5 rounded-xl flex items-center gap-2">
-            <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
-            <span className="text-[10px] sm:text-xs font-black tracking-widest uppercase text-red-500 font-mono">
-              {selectedEventName}
-            </span>
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {selectedEventName && (
+            <div className="bg-red-600/10 border border-red-500/25 px-3 py-1.5 rounded-xl flex items-center gap-2">
+              <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+              <span className="text-[10px] sm:text-xs font-black tracking-widest uppercase text-red-500 font-mono">
+                {selectedEventName}
+              </span>
+            </div>
+          )}
+
+          <button
+            onClick={onBack}
+            className="px-3.5 py-1.5 bg-slate-700/80 hover:bg-slate-700 text-[10px] sm:text-xs text-slate-300 hover:text-white uppercase font-black tracking-widest transition-all rounded-lg border border-slate-600/50 flex items-center gap-1.5"
+            title={isSpectator ? "Access System Login" : "Exit Public View"}
+          >
+            <LogIn size={13} className="shrink-0" />
+            <span>{isSpectator ? "System Login" : "Dashboard"}</span>
+          </button>
+        </div>
       </header>
 
       <div className="p-3 sm:p-6 md:p-8 space-y-6 md:space-y-8 max-w-[1600px] mx-auto flex-1 w-full">
@@ -9708,15 +9719,13 @@ function PublicDashboardView({
         </div>
         <div className="flex flex-col items-center gap-2">
           <p className="text-[11px] text-slate-500 font-medium">© 2026 MY-TKD Tournament Management System</p>
-          {/* Hide back/operator button in public/spectator mode and strict public mode */}
-          {!isStrictPublic && !isSpectator && (
-            <button 
-              onClick={onBack}
-              className="px-3.5 py-1.5 bg-slate-700/30 hover:bg-slate-700 text-[10px] text-slate-400 hover:text-white uppercase font-black tracking-widest transition-all mt-2 rounded-lg border border-slate-700/50"
-            >
-              Exit Public View
-            </button>
-          )}
+          <button 
+            onClick={onBack}
+            className="px-3.5 py-1.5 bg-slate-700/30 hover:bg-slate-700 text-[10px] text-slate-400 hover:text-white uppercase font-black tracking-widest transition-all mt-2 rounded-lg border border-slate-700/50 flex items-center gap-1"
+          >
+            <LogIn size={11} className="shrink-0" />
+            <span>{isSpectator ? "System Login" : "Exit Public View"}</span>
+          </button>
         </div>
       </footer>
     </div>
