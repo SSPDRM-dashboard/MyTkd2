@@ -1,0 +1,8 @@
+{
+  "name": "Remix: MY-TKD Tournament Manager",
+  "description": "A high-performance Taekwondo Tournament Management System for Malaysia with AI-powered live announcements and PDPA-compliant privacy controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

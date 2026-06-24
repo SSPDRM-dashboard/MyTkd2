@@ -1,0 +1,32 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+@layer base {
+  body {
+    @apply font-sans antialiased text-slate-900 bg-white min-h-[100dvh];
+    -webkit-tap-highlight-color: transparent;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    overscroll-behavior-y: contain;
+  }
+
+  /* Prevent zooming on inputs in iOS */
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+.prose table {
+  @apply w-full text-sm border-collapse my-4;
+}
+
+.prose th {
+  @apply bg-slate-100 border border-slate-200 p-2 text-left font-bold text-slate-700;
+}
+
+.prose td {
+  @apply border border-slate-200 p-2 text-slate-600;
+}

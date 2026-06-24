@@ -1,0 +1,156 @@
+{
+  "entities": {
+    "Event": {
+      "title": "Event",
+      "description": "A tournament event",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "sheetUrl": { "type": "string" },
+        "ringQuantity": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "ringQuantity", "createdAt"]
+    },
+    "RingStatus": {
+      "title": "RingStatus",
+      "description": "Status of a specific ring",
+      "type": "object",
+      "properties": {
+        "ringNumber": { "type": "number" },
+        "totalBouts": { "type": "number" },
+        "nextBoutNumber": { "type": "number" },
+        "currentBout": { "type": "object" },
+        "onDeck": { "type": "object" },
+        "inTheHole": { "type": "object" },
+        "isFinalBouts": { "type": "boolean" }
+      },
+      "required": ["ringNumber"]
+    },
+    "BoutQueueItem": {
+      "title": "BoutQueueItem",
+      "description": "An item in the bout queue",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "data": { "type": "object" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "data", "timestamp"]
+    },
+    "MatchHistoryItem": {
+      "title": "MatchHistoryItem",
+      "description": "A completed match",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "data": { "type": "object" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "data", "timestamp"]
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "A user account for the system",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string" },
+        "assignedRing": { "type": "number" }
+      },
+      "required": ["username", "password", "role"]
+    },
+    "GlobalSettings": {
+      "title": "GlobalSettings",
+      "description": "Global settings like categories and clubs",
+      "type": "object",
+      "properties": {
+        "categories": { "type": "array", "items": { "type": "string" } },
+        "clubs": { "type": "array", "items": { "type": "string" } },
+        "currentEventId": { "type": "string" }
+      }
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "A broadcast message from the administrator.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "message": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "author": { "type": "string" }
+      },
+      "required": ["message", "timestamp", "author"]
+    },
+    "BoutMapping": {
+      "title": "BoutMapping",
+      "description": "Logic for bracket advancement",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "eventId": { "type": "string" },
+        "categoryName": { "type": "string" },
+        "sourceBout": { "type": "string" },
+        "nextBout": { "type": "string" },
+        "slot": { "type": "string", "enum": ["Chung", "Hong"] }
+      },
+      "required": ["eventId", "categoryName", "sourceBout", "nextBout", "slot"]
+    },
+    "BoutTransfer": {
+      "title": "BoutTransfer",
+      "description": "A broadcast bout transfer",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fromRing": { "type": "string" },
+        "toRing": { "type": "string" },
+        "boutNumber": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "pinnedUntil": { "type": "string", "format": "date" },
+        "isPinned": { "type": "boolean" },
+        "author": { "type": "string" }
+      },
+      "required": ["fromRing", "toRing", "boutNumber", "pinnedUntil", "isPinned"]
+    }
+  },
+  "firestore": {
+    "/events/{eventId}": {
+      "schema": "Event",
+      "description": "List of events"
+    },
+    "/rings/{ringId}": {
+      "schema": "RingStatus",
+      "description": "Status of all rings"
+    },
+    "/boutQueue/{queueId}": {
+      "schema": "BoutQueueItem",
+      "description": "The queue of upcoming bouts"
+    },
+    "/matchHistory/{historyId}": {
+      "schema": "MatchHistoryItem",
+      "description": "History of completed matches"
+    },
+    "/accounts/{accountId}": {
+      "schema": "UserAccount",
+      "description": "User accounts"
+    },
+    "/settings/{settingId}": {
+      "schema": "GlobalSettings",
+      "description": "Global settings document (e.g. settings/global)"
+    },
+    "/announcements/{announcementId}": {
+      "schema": "Announcement",
+      "description": "Collection of broadcast announcements."
+    },
+    "/event_logic/{mappingId}": {
+      "schema": "BoutMapping",
+      "description": "Bracket advancement logic"
+    },
+    "/bout_transfers/{transferId}": {
+      "schema": "BoutTransfer",
+      "description": "Collection of pinned bout transfers."
+    }
+  }
+}
