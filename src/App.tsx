@@ -9618,16 +9618,14 @@ function PublicDashboardView({
             </div>
           )}
 
-          {!isSpectator && (
-            <button
-              onClick={onBack}
-              className="px-3.5 py-1.5 bg-slate-700/80 hover:bg-slate-700 text-[10px] sm:text-xs text-slate-300 hover:text-white uppercase font-black tracking-widest transition-all rounded-lg border border-slate-600/50 flex items-center gap-1.5"
-              title="Exit Public View"
-            >
-              <LogIn size={13} className="shrink-0" />
-              <span>Dashboard</span>
-            </button>
-          )}
+          <button
+            onClick={onBack}
+            className="px-3.5 py-1.5 bg-slate-700/80 hover:bg-slate-700 text-[10px] sm:text-xs text-slate-300 hover:text-white uppercase font-black tracking-widest transition-all rounded-lg border border-slate-600/50 flex items-center gap-1.5"
+            title={isSpectator ? "Access System Login" : "Exit Public View"}
+          >
+            <LogIn size={13} className="shrink-0" />
+            <span>{isSpectator ? "System Login" : "Dashboard"}</span>
+          </button>
         </div>
       </header>
 
@@ -9721,15 +9719,13 @@ function PublicDashboardView({
         </div>
         <div className="flex flex-col items-center gap-2">
           <p className="text-[11px] text-slate-500 font-medium">© 2026 MY-TKD Tournament Management System</p>
-          {!isSpectator && (
-            <button 
-              onClick={onBack}
-              className="px-3.5 py-1.5 bg-slate-700/30 hover:bg-slate-700 text-[10px] text-slate-400 hover:text-white uppercase font-black tracking-widest transition-all mt-2 rounded-lg border border-slate-700/50 flex items-center gap-1"
-            >
-              <LogIn size={11} className="shrink-0" />
-              <span>Exit Public View</span>
-            </button>
-          )}
+          <button 
+            onClick={onBack}
+            className="px-3.5 py-1.5 bg-slate-700/30 hover:bg-slate-700 text-[10px] text-slate-400 hover:text-white uppercase font-black tracking-widest transition-all mt-2 rounded-lg border border-slate-700/50 flex items-center gap-1"
+          >
+            <LogIn size={11} className="shrink-0" />
+            <span>{isSpectator ? "System Login" : "Exit Public View"}</span>
+          </button>
         </div>
       </footer>
     </div>
